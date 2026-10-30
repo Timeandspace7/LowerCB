@@ -1,0 +1,4 @@
+interface:
+  display_name: "下修盈亏测算"
+  short_description: "测算转债下修后的转股价值、溢价率、退出盈亏及保本价，交付公式可编辑的Excel"
+  default_prompt: "使用 $lowercb-pnl 核实下修条款与行情，比较卖债和转股退出盈亏，并更新Excel。"

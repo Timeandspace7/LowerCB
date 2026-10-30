@@ -1,0 +1,50 @@
+// New workbooks only. Preserve existing user workbooks with a targeted edit instead.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {Workbook,SpreadsheetFile} from '@oai/artifact-tool';
+const [input,output]=process.argv.slice(2);if(!input||!output)throw Error('Usage: export_excel.mjs input.json output.xlsx');
+const here=path.dirname(fileURLToPath(import.meta.url));
+const check=spawnSync(process.env.CODEX_PRIMARY_RUNTIME_PYTHON||'python3',[path.join(here,'calculate.py'),input],{encoding:'utf8'});if(check.status!==0)throw Error(check.stderr);
+const reference=JSON.parse(check.stdout),x=JSON.parse(await fs.readFile(input,'utf8'));
+const w=Workbook.create(),m=w.worksheets.add('下修盈亏测算'),d=w.worksheets.add('数据与节点依据');
+const val=(s,a,v)=>s.getRange(a).values=[[v]],fx=(s,a,v)=>s.getRange(a).formulas=[[v]];
+const head=(s,a,text)=>{s.getRange(a).merge();val(s,a.split(':')[0],text);s.getRange(a).format.fill='#18344C';s.getRange(a).format.font.color='#FFFFFF';};
+for(const s of[m,d]){s.showGridLines=false;s.getRange('A1:H80').format.font={name:'Noto Sans CJK SC',size:11};s.getRange('A1:H80').format.rowHeight=28;s.getRange('A1:H80').format.wrapText=true;s.getRange('A:A').format.columnWidthPx=210;s.getRange('B:C').format.columnWidthPx=125;s.getRange('D:D').format.columnWidthPx=170;s.getRange('E:E').format.columnWidthPx=220;s.getRange('F:H').format.columnWidthPx=150;s.freezePanes.freezeRows(3);}
+head(m,'A1:H1','下修盈亏测算 · v1.0.0');head(d,'A1:H1','数据与节点依据');
+head(m,'A2:H2',x.status||'数量和成本状态待用户确认');
+m.getRange('A3:D3').values=[['可编辑参数','数值','单位','状态']];m.getRange('E3:G3').values=[['结果','数值','口径']];
+const inputs=[['数量Q','quantity','张'],['面值M','face','元/张'],['买入价Pb','buy_price','元/张'],['市场债价Pm','market_bond_price','元/张'],['正股价S','stock_price','元/股'],['现行转股价K0','current_conversion_price','元/股'],['假设转股价K1','assumed_conversion_price','元/股'],['情景卖股价','stock_exit_price','元/股'],['情景卖债价','bond_exit_price','元/张'],['买入费用','buy_fee','元'],['卖债费用','bond_sell_fee','元'],['转股卖股费用','conversion_sell_fee','元'],['资金成本','funding_cost','元'],['卖债路径税后利息','bond_interest','元'],['转股路径税后利息','conversion_interest','元'],['股票最小报价','tick','元']];
+const defaults={face:100,stock_exit_price:x.stock_price,bond_exit_price:95,tick:.01};
+inputs.forEach(([label,k,unit],i)=>{const r=i+4;let raw=x[k]??defaults[k];let missing=raw==null;let v=missing?(r>=13&&r<=18?0:null):Number(raw);val(m,`A${r}`,label);val(m,`B${r}`,v);val(m,`C${r}`,unit);val(m,`D${r}`,missing?(r>=13?'未知，暂未计入':'待填写'):'输入或情景参数');});
+m.getRange('B4:B19').format.fill='#FFF2CC';m.getRange('B4:B19').format.font.color='#0000FF';m.getRange('B4:B19').setNumberFormat('0.0000');m.getRange('B4').setNumberFormat('0');
+const qguard=f=>`=IF(COUNT($B$4)=0,"待填数量",${f})`;
+const results=[['名义投入',qguard('IF(B4=0,0,B4*B6+B13)'),'本金+买入费'],['现行转股价值','=B5*B8/B9','按现行有效价'],['现行市场溢价率','=IF(COUNT(B7)=0,"待补行情",B7/F5-1)','市场债价/现行价值-1'],['假设下修后转股价值','=B5*B8/B10','假设价须生效'],['下修后成本溢价率','=B6/F7-1','成本/假设价值-1'],['下修后卖债情景溢价率','=B12/F7-1','情景价/假设价值-1'],['卖债盈亏',qguard('IF(B4=0,0,B4*(B12-B6)-B13-B14-B16+B17)'),'与转股路径互斥'],['转股整数股',qguard('INT(B4*B5/B10)'),'单笔合并转换'],['零股剩余面值',qguard('B4*B5-F11*B10'),'返还规则需核实'],['转股退出盈亏',qguard('IF(B4=0,0,F11*B11+F12+B18-B4*B6-B13-B15-B16)'),'固定费用；含返还'],['转股退出收益率','=IF(COUNT(B4)=0,"待填数量",IF(F4=0,"不适用",F13/F4))','非年化'],['理论保本正股价','=B6*B10/B5','忽略取整和费用'],['实际保本正股价',qguard('IF(F11=0,"不适用",(B4*B6+B13+B15+B16-F12-B18)/F11)'),'固定金额费用'],['卖债保本价',qguard('IF(B4=0,"不适用",B6+(B13+B14+B16-B17)/B4)'),'费用未知为毛保本']];
+results.forEach(([l,f,n],i)=>{val(m,`E${i+4}`,l);fx(m,`F${i+4}`,f);val(m,`G${i+4}`,n);});m.getRange('F4:F17').setNumberFormat('0.0000');for(const r of[6,8,9,14])m.getRange(`F${r}`).setNumberFormat('0.00%');
+head(m,'A21:H21','费用未知时仅作毛测算；溢价率不是收益率。新转股价生效及正常交易为退出前提。');
+head(m,'A23:H23','直接卖债：价格均为情景，非预测');
+m.getRange('A24:H24').values=[['假设债价','下修后转股价值','转股溢价率','每张毛盈亏','数量','持仓盈亏','收益率','保本债价']];
+const prices=x.bond_prices||[85,90,93,95,100,110,120,145];
+if(prices.length>12)throw Error('Use at most 12 bond price cases, or extend the layout first');
+prices.forEach((p,i)=>{const r=i+25;val(m,`A${r}`,Number(p));fx(m,`B${r}`,'=$F$7');fx(m,`C${r}`,`=A${r}/B${r}-1`);fx(m,`D${r}`,`=A${r}-$B$6`);fx(m,`E${r}`,qguard('$B$4'));fx(m,`F${r}`,qguard(`IF($B$4=0,0,$B$4*D${r}-$B$13-$B$14-$B$16+$B$17)`));fx(m,`G${r}`,qguard(`IF($F$4=0,"不适用",F${r}/$F$4)`));fx(m,`H${r}`,'=$F$17');});
+m.getRange('A25:A36').format.fill='#FFF2CC';m.getRange('B25:B36').setNumberFormat('0.0000');m.getRange('C25:C36').setNumberFormat('0.00%');m.getRange('D25:F36').setNumberFormat('0.00');m.getRange('G25:G36').setNumberFormat('0.00%');
+head(m,'A38:H38','转股退出情景：不同转股价及正股变化');m.getRange('A39:H39').values=[['转股价','卖股价','转股价值/张','整数股数','零股剩余面值','退出盈亏','收益率','备注']];
+for(let i=0;i<6;i++){const r=40+i;fx(m,`A${r}`,i<3?'=$B$9':'=$B$10');fx(m,`B${r}`,`=$B$8*${[.8,.9,1][i%3]}`);fx(m,`C${r}`,`=$B$5*B${r}/A${r}`);fx(m,`D${r}`,qguard(`INT($B$4*$B$5/A${r})`));fx(m,`E${r}`,qguard(`$B$4*$B$5-D${r}*A${r}`));fx(m,`F${r}`,qguard(`IF($B$4=0,0,D${r}*B${r}+E${r}+$B$18-$B$4*$B$6-$B$13-$B$15-$B$16)`));fx(m,`G${r}`,qguard(`IF($F$4=0,"不适用",F${r}/$F$4)`));val(m,`H${r}`,i<3?'现行价情景':'下修假设情景');}
+head(m,'A48:H48','保本附近：负价格排除，相同价格行可去重');m.getRange('A49:D49').values=[['行类型','股价','转股盈亏','收益率']];
+const be='$F$16',points=[`${be}-0.10`,`ROUNDDOWN(${be}/$B$19,0)*$B$19`,be,`ROUNDUP(${be}/$B$19,0)*$B$19`,`${be}+0.10`];
+points.forEach((p,i)=>{const r=50+i;val(m,`A${r}`,['保本下0.10','相邻下报价','理论零盈亏','相邻上报价','保本上0.10'][i]);fx(m,`B${r}`,`=IF(ISNUMBER($F$16),IF(${p}<0,"不适用",${p}),"不适用")`);fx(m,`C${r}`,`=IF(ISNUMBER(B${r}),$F$11*B${r}+$F$12+$B$18-$B$4*$B$6-$B$13-$B$15-$B$16,"不适用")`);fx(m,`D${r}`,`=IF(ISNUMBER(C${r}),C${r}/$F$4,"不适用")`);});m.getRange('B50:C54').setNumberFormat('0.0000');m.getRange('D50:D54').setNumberFormat('0.00%');m.getRange('G40:G45').setNumberFormat('0.00%');
+val(d,'A3','行情时间');val(d,'B3',x.market_asof||'待补齐');val(d,'A4','数据来源与精度');val(d,'B4',x.source||'待核实');d.getRange('B3:H3').merge();d.getRange('B4:H4').merge();
+d.getRange('A6:D6').values=[['节点','状态','日期','依据/更新内容']];['董事会决定','股东会前','最终定价/生效'].forEach((n,i)=>{val(d,`A${i+7}`,n);val(d,`B${i+7}`,x.nodes?.[i]?.status||'待核实');val(d,`C${i+7}`,x.nodes?.[i]?.date||null);val(d,`D${i+7}`,x.nodes?.[i]?.source||'待补齐公告');});
+d.getRange('A11:D11').values=[['完整交易日','成交额/元','成交股数/股','日交易均价']];
+(x.daily||[]).forEach((z,i)=>{const r=i+12;d.getRange(`A${r}:C${r}`).values=[[z.date,Number(z.amount),Number(z.shares)]];});
+for(let r=12;r<=31;r++)fx(d,`D${r}`,`=IF(OR(COUNT(B${r})=0,COUNT(C${r})=0,C${r}=0),"待补齐",B${r}/C${r})`);
+val(d,'A33','20日交易均价');fx(d,'B33','=IF(AND(COUNT(B12:B31)=20,COUNT(C12:C31)=20,SUM(C12:C31)>0),SUM(B12:B31)/SUM(C12:C31),"待补齐20日")');val(d,'A34','前1日交易均价');fx(d,'B34','=IF(COUNT(C31)=0,"待补齐",IF(C31=0,"待补齐",B31/C31))');val(d,'A35','两项均价参考较高值');fx(d,'B35','=IF(COUNT(B33:B34)=2,MAX(B33:B34),"待补齐")');
+head(d,'A37:H37','均价窗口须按实际会议日前核实；两项均价不能代替该券全部定价约束。');val(d,'A39','条款/股东会日/合法下限依据');val(d,'B39',x.terms||'待核实发行文件；未核实前不得视作正式底价');d.getRange('B39:H39').merge();
+d.getRange('B12:C31').format.fill='#FFF2CC';d.getRange('B33:B35').setNumberFormat('0.0000');
+w.recalculate();if(Math.abs(m.getRange('F7').values[0][0]-Number(reference.assumed_value))>1e-7)throw Error('Value reconciliation failed');
+if(reference.conversion_pnl!==null&&Math.abs(m.getRange('F13').values[0][0]-Number(reference.conversion_pnl))>1e-7)throw Error('PnL reconciliation failed');
+const issues=await w.inspect({kind:'match',searchTerm:'#REF!|#DIV/0!|#VALUE!|#NAME\\?',options:{useRegex:true,maxResults:10},maxChars:1000});if(!issues.ndjson.includes('matched 0'))throw Error(issues.ndjson);
+await fs.mkdir(path.dirname(path.resolve(output)),{recursive:true});await(await SpreadsheetFile.exportXlsx(w)).save(output);
+for(const [s,r,n]of[['下修盈亏测算','A3:H19','summary'],['下修盈亏测算','A23:H36','sales'],['数据与节点依据','A3:H11','sources']]){const p=await w.render({sheetName:s,range:r,scale:1,format:'png'});await fs.writeFile(`${output}.${n}.png`,new Uint8Array(await p.arrayBuffer()));}
+console.log(JSON.stringify({output,assumed_value:m.getRange('F7').values,conversion_pnl:m.getRange('F13').values}));

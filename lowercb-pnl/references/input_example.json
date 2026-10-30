@@ -1,0 +1,23 @@
+{
+  "status": "合成假设示例，非真实持仓或实时行情",
+  "quantity": 10,
+  "face": 100,
+  "buy_price": 93,
+  "market_bond_price": 92.386,
+  "stock_price": 11.4,
+  "current_conversion_price": 18.36,
+  "assumed_conversion_price": 12.84,
+  "stock_exit_price": 11.4,
+  "bond_exit_price": 95,
+  "buy_fee": null,
+  "bond_sell_fee": null,
+  "conversion_sell_fee": null,
+  "funding_cost": null,
+  "bond_interest": null,
+  "conversion_interest": null,
+  "tick": 0.01,
+  "market_asof": "示例数据，无实时意义",
+  "source": "固定参数合成案例",
+  "daily": []
+}
+
